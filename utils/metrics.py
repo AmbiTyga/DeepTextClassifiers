@@ -1,19 +1,3 @@
-# -*- coding: utf-8 -*-
-
-"""
-
-@author: alexyang
-
-@contact: alex.yang0326@gmail.com
-
-@file: metrics.py
-
-@time: 2019/2/8 10:24
-
-@desc:
-
-"""
-
 import numpy as np
 from sklearn.metrics import accuracy_score
 
