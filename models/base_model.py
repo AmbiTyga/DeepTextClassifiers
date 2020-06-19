@@ -1,19 +1,3 @@
-# -*- coding: utf-8 -*-
-
-"""
-
-@author: alexyang
-
-@contact: alex.yang0326@gmail.com
-
-@file: base_model.py
-
-@time: 2019/2/1 14:03
-
-@desc:
-
-"""
-
 import abc
 
 
