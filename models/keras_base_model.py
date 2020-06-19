@@ -1,24 +1,8 @@
-# -*- coding: utf-8 -*-
-
-"""
-
-@author: alexyang
-
-@contact: alex.yang0326@gmail.com
-
-@file: keras_base_model.py
-
-@time: 2019/2/3 17:14
-
-@desc:
-
-"""
-
 import os
 import abc
 import logging
 
-from keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from models.base_model import BaseModel
 from utils.metrics import eval_acc
 
