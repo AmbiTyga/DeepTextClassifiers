@@ -1,19 +1,4 @@
-# -*- coding: utf-8 -*-
-
-"""
-
-@author: alexyang
-
-@contact: alex.yang0326@gmail.com
-
-@file: config.py
-
-@time: 2019/2/8 8:44
-
-@desc:
-
-"""
-from keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam
 
 
 class Config(object):
