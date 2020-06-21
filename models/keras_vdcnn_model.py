@@ -2,136 +2,129 @@
 
 """
 
-@author: alexyang
+@author: Ambesh Shekahr
 
-@contact: alex.yang0326@gmail.com
+@contact: ambesh.sinha@gmail.com
 
 @file: keras_vdcnn_model.py
 
-@time: 2019/2/8 13:01
+@time: 2020/6/21 18:28
 
 @desc:
 
 """
-
-import math
-from keras.models import Model
-from keras.layers import Input, Embedding, SpatialDropout1D, Conv1D, Flatten, Dense, BatchNormalization, ReLU, Add, \
-    MaxPooling1D
-from keras import backend as K
-
-from models.keras_base_model import KerasBaseModel
 from layers.kmaxpooling import KMaxPooling
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Embedding, Conv1D, BatchNormalization, Activation, Add, MaxPooling1D, Dense, Flatten
+from tensorflow.keras.utils import get_source_inputs
 
+def identity_block(inputs, filters, kernel_size=3, use_bias=False, shortcut=False):
+    conv1 = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same')(inputs)
+    bn1 = BatchNormalization()(conv1)
+    relu = Activation('relu')(bn1)
+    conv2 = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same')(relu)
+    out = BatchNormalization()(conv2)
+    if shortcut:
+        out = Add()([out, inputs])
+    return Activation('relu')(out)
 
-class VDCNN(KerasBaseModel):
-    def __init__(self, config, **kwargs):
-        super(VDCNN, self).__init__(config, **kwargs)
+def conv_block(inputs, filters, kernel_size=3, use_bias=False, shortcut=False, 
+               pool_type='max', sorted=True, stage=1):
+    conv1 = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same')(inputs)
+    bn1 = BatchNormalization()(conv1)
+    relu1 = Activation('relu')(bn1)
 
-    def build(self, depth=[4, 4, 10, 10], pooling_type='maxpool', use_shortcut = False):
-        input_text = Input(shape=(self.max_len,))
+    conv2 = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same')(relu1)
+    out = BatchNormalization()(conv2)
 
-        embedding_layer = Embedding(self.word_embeddings.shape[0], self.word_embeddings.shape[1],
-                                    weights=[self.word_embeddings],
-                                    trainable=self.config.word_embed_trainable)(input_text)
-        text_embed = SpatialDropout1D(0.2)(embedding_layer)
+    if shortcut:
+        residual = Conv1D(filters=filters, kernel_size=1, strides=2, name='shortcut_conv1d_%d' % stage)(inputs)
+        residual = BatchNormalization(name='shortcut_batch_normalization_%d' % stage)(residual)
+        out = downsample(out, pool_type=pool_type, sorted=sorted, stage=stage)
+        out = Add()([out, residual])
+        out = Activation('relu')(out)
+    else:
+        out = Activation('relu')(out)
+        out = downsample(out, pool_type=pool_type, sorted=sorted, stage=stage)
+    if pool_type is not None:
+        out = Conv1D(filters=2*filters, kernel_size=1, strides=1, padding='same', name='1_1_conv_%d' % stage)(out)
+        out = BatchNormalization(name='1_1_batch_normalization_%d' % stage)(out)
+    return out
 
-        # first temporal conv layer
-        conv_out = Conv1D(filters=64, kernel_size=3, kernel_initializer='he_uniform', padding='same')(text_embed)
-        shortcut = conv_out
+def downsample(inputs, pool_type='max', sorted=True, stage=1):
+    if pool_type == 'max':
+        out = MaxPooling1D(pool_size=3, strides=2, padding='same', name='pool_%d' % stage)(inputs)
+    elif pool_type == 'k_max':
+        k = int(inputs._keras_shape[1]/2)
+        out = KMaxPooling(k=k, sorted=sorted, name='pool_%d' % stage)(inputs)
+    elif pool_type == 'conv':
+        out = Conv1D(filters=inputs._keras_shape[-1], kernel_size=3, strides=2, padding='same', name='pool_%d' % stage)(inputs)
+        out = BatchNormalization()(out)
+    elif pool_type is None:
+        out = inputs
+    else:
+        raise ValueError('unsupported pooling type!')
+    return out
 
-        # temporal conv block: 64
-        for i in range(depth[0]):
-            if i < depth[0] - 1:
-                shortcut = conv_out
-                conv_out = self.conv_block(inputs=conv_out, filters=64, use_shortcut=use_shortcut, shortcut=shortcut)
-            else:
-                # shortcut is not used at the last conv block
-                conv_out = self.conv_block(inputs=conv_out, filters=64, use_shortcut=use_shortcut, shortcut=None)
+def VDCNN(num_classes=8, depth=9, sequence_length=228, embedding_dim=300, 
+          shortcut=False, pool_type='max', sorted=True, use_bias=False, input_tensor=None):
+    if depth == 9:
+        num_conv_blocks = (1, 1, 1, 1)
+    elif depth == 17:
+        num_conv_blocks = (2, 2, 2, 2)
+    elif depth == 29:
+        num_conv_blocks = (5, 5, 2, 2)
+    elif depth == 49:
+        num_conv_blocks = (8, 8, 5, 3)
+    else:
+        raise ValueError('unsupported depth for VDCNN.')
+  
+    inputs = Input(shape=(sequence_length, ), name='inputs')
+    embedded_chars = Embedding(len(word_index) + 1,
+                            EMBEDDING_DIM,
+                            weights=[embedding_matrix],
+                            input_length=MAX_SEQUENCE_LENGTH,
+                            trainable=False)(inputs)
+    out = Conv1D(filters=64, kernel_size=3, strides=1, padding='same', name='temp_conv')(embedded_chars)
 
-        # down-sampling
-        # shortcut is the second last conv block output
-        conv_out = self.dowm_sampling(inputs=conv_out, pooling_type=pooling_type, use_shortcut=use_shortcut,
-                                      shortcut=shortcut)
-        shortcut = conv_out
+    # Convolutional Block 64
+    for _ in range(num_conv_blocks[0] - 1):
+        out = identity_block(out, filters=64, kernel_size=3, use_bias=use_bias, shortcut=shortcut)
+    out = conv_block(out, filters=64, kernel_size=3, use_bias=use_bias, shortcut=shortcut, 
+                     pool_type=pool_type, sorted=sorted, stage=1)
 
-        # temporal conv block: 128
-        for i in range(depth[1]):
-            if i < depth[1] - 1:
-                shortcut = conv_out
-                conv_out = self.conv_block(inputs=conv_out, filters=128, use_shortcut=use_shortcut, shortcut=shortcut)
-            else:
-                # shortcut is not used at the last conv block
-                conv_out = self.conv_block(inputs=conv_out, filters=128, use_shortcut=use_shortcut, shortcut=None)
+    # Convolutional Block 128
+    for _ in range(num_conv_blocks[1] - 1):
+        out = identity_block(out, filters=128, kernel_size=3, use_bias=use_bias, shortcut=shortcut)
+    out = conv_block(out, filters=128, kernel_size=3, use_bias=use_bias, shortcut=shortcut, 
+                     pool_type=pool_type, sorted=sorted, stage=2)
 
-        # down-sampling
-        conv_out = self.dowm_sampling(inputs=conv_out, pooling_type=pooling_type, use_shortcut=use_shortcut,
-                                      shortcut=shortcut)
-        shortcut = conv_out
+    # Convolutional Block 256
+    for _ in range(num_conv_blocks[2] - 1):
+        out = identity_block(out, filters=256, kernel_size=3, use_bias=use_bias, shortcut=shortcut)
+    out = conv_block(out, filters=256, kernel_size=3, use_bias=use_bias, shortcut=shortcut, 
+                     pool_type=pool_type, sorted=sorted, stage=3)
 
-        # temporal conv block: 256
-        for i in range(depth[2]):
-            if i < depth[1] - 1:
-                shortcut = conv_out
-                conv_out = self.conv_block(inputs=conv_out, filters=256, use_shortcut=use_shortcut, shortcut=shortcut)
-            else:
-                # shortcut is not used at the last conv block
-                conv_out = self.conv_block(inputs=conv_out, filters=256, use_shortcut=use_shortcut, shortcut=None)
+    # Convolutional Block 512
+    for _ in range(num_conv_blocks[3] - 1):
+        out = identity_block(out, filters=512, kernel_size=3, use_bias=use_bias, shortcut=shortcut)
+    out = conv_block(out, filters=512, kernel_size=3, use_bias=use_bias, shortcut=False, 
+                     pool_type=None, stage=4)
 
-        # down-sampling
-        conv_out = self.dowm_sampling(inputs=conv_out, pooling_type=pooling_type, use_shortcut=use_shortcut,
-                                      shortcut=shortcut)
+    # k-max pooling with k = 8
+    out = KMaxPooling(k=8, sorted=True)(out)
+    out = Flatten()(out)
 
-        # temporal conv block: 512
-        for i in range(depth[3]):
-            if i < depth[1] - 1:
-                shortcut = conv_out
-                conv_out = self.conv_block(inputs=conv_out, filters=128, use_shortcut=use_shortcut, shortcut=shortcut)
-            else:
-                # shortcut is not used at the last conv block
-                conv_out = self.conv_block(inputs=conv_out, filters=128, use_shortcut=use_shortcut, shortcut=None)
+    # Dense Layers
+    out = Dense(2048, activation='relu')(out)
+    out = Dense(2048, activation='relu')(out)
+    out = Dense(num_classes, activation='softmax')(out)
 
-        # 8-max pooling
-        conv_out = KMaxPooling(k=8)(conv_out)
-        flatten = Flatten()(conv_out)
+    if input_tensor is not None:
+        inputs = get_source_inputs(input_tensor)
+    else:
+        inputs = inputs
 
-        fc1 = Dense(2048, activation='relu')(flatten)
-        sentence_embed = Dense(2048, activation='relu')(fc1)
-
-        dense_layer = Dense(256, activation='relu')(sentence_embed)
-        output = Dense(self.n_class, activation='softmax')(dense_layer)
-
-        model = Model(input_text, output)
-        model.compile(loss='categorical_crossentropy', metrics=['acc'], optimizer=self.config.optimizer)
-        return model
-
-    def conv_block(self, inputs, filters, use_shortcut, shortcut):
-        conv_1 = Conv1D(filters=filters, kernel_size=3, kernel_initializer='he_uniform', padding='same')(inputs)
-        bn_1 = BatchNormalization()(conv_1)
-        relu_1 = ReLU()(bn_1)
-        conv_2 = Conv1D(filters=filters, kernel_size=3, kernel_initializer='he_uniform', padding='same')(relu_1)
-        bn_2 = BatchNormalization()(conv_2)
-        relu_2 = ReLU()(bn_2)
-
-        if shortcut is not None and use_shortcut:
-            return Add()([inputs, shortcut])
-        else:
-            return relu_2
-
-    def dowm_sampling(self, inputs, pooling_type, use_shortcut, shortcut):
-        if pooling_type == 'kmaxpool':
-            k = math.ceil(K.int_shape(inputs)[1] / 2)
-            pool = KMaxPooling(k)(inputs)
-        elif pooling_type == 'maxpool':
-            pool = MaxPooling1D(pool_size=3, strides=2, padding='same')(inputs)
-        elif pooling_type == 'conv':
-            pool = Conv1D(filters=K.int_shape(inputs)[-1], kernel_size=3, strides=2,
-                          kernel_initializer='he_uniform', padding='same')(inputs)
-        else:
-            raise ValueError('pooling_type `{}` not understood'.format(pooling_type))
-        if shortcut is not None and use_shortcut:
-            shortcut = Conv1D(filters=K.int_shape(inputs)[-1], kernel_size=3, strides=2,
-                              kernel_initializer='he_uniform', padding='same')(shortcut)
-            return Add()([pool, shortcut])
-        else:
-            return pool
+    # Create model.
+    model = Model(inputs=inputs, outputs=out, name='VDCNN')
+    return model
